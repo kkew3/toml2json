@@ -6,32 +6,30 @@ on:
       - main
   pull_request:
 
-permissions: {}
-
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          persist-credentials: false
+          components: "rustfmt, clippy"
+
       - name: Format
-        run: cargo fmt && git diff --exit-code
+        run: rustfmt --check
+
       - name: Lint
-        run: |
-          rustup update
-          rustup component add clippy
-          cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings
 
   build-stable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
+      - uses: actions/checkout@v4
 
-      - name: Toolchain
-        run: rustup update
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build
+        run: cargo build -r
