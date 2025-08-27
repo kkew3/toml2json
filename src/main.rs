@@ -44,7 +44,7 @@ impl fmt::Display for Error {
 #[derive(Parser)]
 #[command(about, version)]
 struct Cli {
-    /// the TOML to convert [default: stdin]
+    /// The TOML to convert [default: stdin]
     input: Option<PathBuf>,
 }
 
