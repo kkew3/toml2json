@@ -1,72 +1,86 @@
 #![forbid(unsafe_code)]
 
-use std::fs;
+use std::fmt;
+use std::fs::File;
 use std::io::{self, Read};
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-use anyhow::{Context, Result};
-use clap::{Arg, ArgAction, Command};
+use clap::Parser;
 
-fn app() -> Command {
-    Command::new(env!("CARGO_PKG_NAME"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .arg(
-            Arg::new("pretty")
-                .help("pretty print the JSON")
-                .short('p')
-                .long("pretty")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("input")
-                .help("the TOML to convert")
-                .index(1)
-                .default_value("-"),
-        )
+enum Error {
+    Io,
+    Deser,
+    Ser,
 }
 
-fn main() -> Result<()> {
-    let matches = app().get_matches();
-
-    // Get our input source (which can be - or a filename) and its
-    // corresponding buffer. We don't bother streaming or chunking,
-    // since the `toml` crate only supports slices and strings.
-    let input_src = matches.get_one::<String>("input").unwrap();
-    let input_buf = match input_src.as_ref() {
-        "-" => {
-            let mut input_buf = String::new();
-            io::stdin()
-                .read_to_string(&mut input_buf)
-                .with_context(|| "failed to collect stdin")?;
-            input_buf
+macro_rules! impl_from_err {
+    ($err_type:ty, $variant:path) => {
+        impl From<$err_type> for Error {
+            fn from(_err: $err_type) -> Self {
+                $variant
+            }
         }
-        input => fs::read_to_string(input)
-            .with_context(|| format!("failed to collect from input: {input}"))?,
     };
+}
+
+impl_from_err!(io::Error, Self::Io);
+impl_from_err!(toml::de::Error, Self::Deser);
+impl_from_err!(serde_json::Error, Self::Ser);
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io => write!(f, "E: failed to collect stdin"),
+            Self::Ser => write!(f, "E: failed to collect from stdin"),
+            Self::Deser => write!(
+                f,
+                "E: JSON serialization and/or stdout streaming failed"
+            ),
+        }
+    }
+}
+
+#[derive(Parser)]
+#[command(about, version)]
+struct Cli {
+    /// the TOML to convert [default: stdin]
+    input: Option<PathBuf>,
+}
+
+fn app(cli: Cli) -> Result<(), Error> {
+    // Get our input source from stdin. We don't bother streaming or chunking,
+    // since the `toml` crate only supports slices and strings.
+    let mut input_buf = Vec::new();
+    read_input(cli.input, &mut input_buf)?;
 
     // Turn our collected input into a value. We can't be more specific than
     // value, since we're doing arbitrary valid TOML conversions.
-    let value = toml::from_str::<toml::Value>(&input_buf)
-        .with_context(|| format!("parsing TOML from {input_src} failed"))?;
+    let value: toml::Value = toml::from_slice(&input_buf)?;
 
     // Spit back out, but as JSON. `serde_json` *does* support streaming, so
     // we do it.
-    if *matches.get_one::<bool>("pretty").unwrap() {
-        serde_json::to_writer_pretty(io::stdout(), &value)
-    } else {
-        serde_json::to_writer(io::stdout(), &value)
-    }
-    .with_context(|| "JSON serialization and/or stdout streaming failed")?;
+    serde_json::to_writer(io::stdout(), &value)?;
 
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn read_input(input: Option<PathBuf>, buf: &mut Vec<u8>) -> io::Result<()> {
+    match input {
+        None => io::stdin().read_to_end(buf)?,
+        Some(path) => File::open(path)?.read_to_end(buf)?,
+    };
+    Ok(())
+}
 
-    #[test]
-    fn test_app() {
-        app().debug_assert();
-    }
+fn eprintln_err_and_exit(err: Error) -> ExitCode {
+    eprintln!("{}", err);
+    ExitCode::FAILURE
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    app(cli)
+        .map(|_| ExitCode::SUCCESS)
+        .unwrap_or_else(eprintln_err_and_exit)
 }
